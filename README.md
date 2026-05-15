@@ -1,7 +1,7 @@
 # 🎬 LookDev Studio Pro (Pipeline Edition)
 
-![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)
-![Target](https://img.shields.io/badge/target-Maya_2020%2B_%7C_Arnold-orange.svg)
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
 **LookDev Studio Pro** es una herramienta de Technical Art construida en **MEL (Maya Embedded Language)**. Actúa como el núcleo de estandarización visual y control de calidad (QA) para pipelines de producción 3D y Virtual Production.
