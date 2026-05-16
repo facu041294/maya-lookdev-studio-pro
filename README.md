@@ -1,9 +1,11 @@
 # 🎬 LookDev Studio Pro
 
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
-![Target](https://img.shields.io/badge/target-Maya_2020%2B_%7C_Arnold-orange.svg)
+![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
+
+![ImagePreview](./examples/image/PreviewLookDevTool.jpg)
 
 **LookDev Studio Pro** es una herramienta de Technical Art procedimental construida en **MEL (Maya Embedded Language)**. Diseñada como el núcleo de estandarización visual y control de calidad (QA) para pipelines de producción 3D y Virtual Production.
 
