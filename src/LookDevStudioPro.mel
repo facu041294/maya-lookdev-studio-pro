@@ -1,26 +1,55 @@
 // 1. Limpieza de UI previa
 if (`window -exists photoStudioWindow`) deleteUI photoStudioWindow;
-window -title "Photo Studio (Tri-Cam & Mat)" -widthHeight 280 180 photoStudioWindow;
+window -title "Photo Studio (Tri-Cam & Mat)" -widthHeight 280 210 photoStudioWindow;
 columnLayout -adjustableColumn true;
 text -label "Estudio Arnold (Z-Up Pro)" -align "center" -height 30;
 button -label "Generar Estudio" -command "createFullStudio()" -height 40 -backgroundColor 0.15 0.4 0.2;
+separator -style "in" -height 10;
+text -label "Render Presets (Arnold)" -align "center" -height 20;
+rowLayout -numberOfColumns 3 -columnWidth3 86 86 86;
+button -label "Draft 540p"  -command "applyRenderPreset(\"draft\")"  -height 30 -backgroundColor 0.18 0.18 0.28;
+button -label "Review 720p" -command "applyRenderPreset(\"review\")" -height 30 -backgroundColor 0.18 0.18 0.28;
+button -label "Final 1080p" -command "applyRenderPreset(\"final\")"  -height 30 -backgroundColor 0.18 0.18 0.28;
+setParent ..;
 showWindow photoStudioWindow;
 
+// -----------------------------------------------------------------------
+global proc applyRenderPreset(string $preset) {
+    int $isMtoa = `pluginInfo -q -loaded "mtoa"`;
+    int $w; int $h; int $aa; int $diff; int $spec;
+
+    if ($preset == "draft") {
+        $w = 960;  $h = 540;  $aa = 3;  $diff = 2;  $spec = 2;
+    } else if ($preset == "review") {
+        $w = 1280; $h = 720;  $aa = 4;  $diff = 3;  $spec = 3;
+    } else {
+        $w = 1920; $h = 1080; $aa = 6;  $diff = 4;  $spec = 4;
+    }
+
+    setAttr "defaultResolution.width"  $w;
+    setAttr "defaultResolution.height" $h;
+    setAttr "defaultResolution.deviceAspectRatio" (float($w) / float($h));
+
+    if ($isMtoa && `objExists "defaultArnoldRenderOptions"`) {
+        setAttr "defaultArnoldRenderOptions.AASamples"             $aa;
+        setAttr "defaultArnoldRenderOptions.GIDiffuseSamples"      $diff;
+        setAttr "defaultArnoldRenderOptions.GISpecularSamples"     $spec;
+        setAttr "defaultArnoldRenderOptions.GITransmissionSamples" $spec;
+        setAttr "defaultArnoldRenderOptions.GISSSSamples"          $spec;
+        setAttr "defaultArnoldRenderOptions.GIVolumeSamples"       2;
+    }
+    print ("Render preset '" + $preset + "' aplicado: " + $w + "x" + $h + ".\n");
+}
+
+// -----------------------------------------------------------------------
 global proc createFullStudio() {
 
     // --- FASE 0: VALIDACIÓN (pre-chunk) ---
-    // Toda la validación ocurre antes de abrir el undoInfo chunk para garantizar
-    // que un error temprano nunca deje el chunk abierto (lo que corrompería el
-    // sistema de undo de la sesión completa).
-
     int $isMtoa = `pluginInfo -q -loaded "mtoa"`;
-
-    // Captura de selección antes de cualquier creación de nodos.
     string $sel[] = `ls -sl`;
 
     string $sourceMeshes[];
     if (size($sel) > 0) {
-        // -ni: excluye intermediate objects (blend shapes, skin cluster, etc.)
         $sourceMeshes = `listRelatives -allDescendents -type "mesh" -ni $sel`;
     } else {
         $sourceMeshes = `ls -type "mesh" -ni`;
@@ -48,12 +77,10 @@ global proc createFullStudio() {
     float $cZ = ($bb[2] + $bb[5]) / 2.0;
     float $zMin = $bb[2];
 
-    // --- FASE 1: CONSTRUCCIÓN (dentro del undo chunk) ---
+    // --- FASE 1: CONSTRUCCIÓN ---
     undoInfo -openChunk;
 
     if (`objExists "PhotoStudio_SETUP_GRP"`) delete "PhotoStudio_SETUP_GRP";
-    // Eliminar Cyclorama_GEO huérfano para que el nombre esté disponible
-    // y evitar que Maya renombre el nuevo plano a Cyclorama_GEO1.
     if (`objExists "Cyclorama_GEO"`) delete "Cyclorama_GEO";
     string $mainGroup = `group -empty -name "PhotoStudio_SETUP_GRP"`;
 
@@ -63,7 +90,6 @@ global proc createFullStudio() {
 
     select -r ($plane[0] + ".e[3]");
     polyExtrudeEdge -keepFacesTogether 1 -ch 0;
-    // polyExtrudeEdge deja los nuevos edges extruidos seleccionados; move los desplaza.
     move -r -ws -wd 0 0 ($maxDim * 8);
 
     string $creaseEdges[] = `polyListComponentConversion -toEdge -internal ($plane[0] + ".f[0]") ($plane[0] + ".f[1]")`;
@@ -73,9 +99,6 @@ global proc createFullStudio() {
     polySoftEdge -angle 180 $plane[0];
     parent $plane[0] $mainGroup;
 
-    // aiShadowMatte: color de fondo exacto e independiente de iluminación,
-    // con shadow catcher nativo. backgroundColor es float3 en Arnold; omitir
-    // -type para evitar type mismatch silencioso en MtoA < 3.3.
     string $cycSG = `sets -renderable true -noSurfaceShader true -empty -name "Cyclorama_SG"`;
     string $cycMat = "";
     if ($isMtoa) {
@@ -108,9 +131,14 @@ global proc createFullStudio() {
         $rimT  = `createNode transform -n "Rim_LGT"       -p $mainGroup`;
         $rimS  = `createNode areaLight -n "Rim_LGTShape"  -p $rimT`;
     }
-    connectAttr -nextAvailable ($keyT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
-    connectAttr -nextAvailable ($fillT + ".instObjGroups") "defaultLightSet.dagSetMembers";
-    connectAttr -nextAvailable ($rimT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
+
+    // Guard para MtoA 4+ que puede auto-registrar aiAreaLight en defaultLightSet.
+    if (!`sets -isMember defaultLightSet $keyT`)
+        connectAttr -nextAvailable ($keyT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
+    if (!`sets -isMember defaultLightSet $fillT`)
+        connectAttr -nextAvailable ($fillT + ".instObjGroups") "defaultLightSet.dagSetMembers";
+    if (!`sets -isMember defaultLightSet $rimT`)
+        connectAttr -nextAvailable ($rimT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
 
     setAttr ($keyS+".intensity") 360;
     setAttr -type double3 ($keyS+".color") 1 0.85 0.6;
@@ -133,41 +161,76 @@ global proc createFullStudio() {
         setAttr ($domeS + ".intensity") 0.1;
     }
 
-    // --- 3. CÁMARAS (prefijo CAM_ per NamingConvention_Guide.md) ---
-    string $cam1T = `createNode transform -n "CAM_Studio_Main" -p $mainGroup`;
+    // --- 3. CÁMARAS DE PERSPECTIVA ---
+    string $perspGroup = `group -empty -name "CamsPersp_GRP" -p $mainGroup`;
+
+    string $cam1T = `createNode transform -n "CAM_Studio_Main" -p $perspGroup`;
     string $cam1S = `createNode camera -n "CAM_Studio_MainShape" -p $cam1T`;
     setAttr ($cam1S+".focalLength") 35; setAttr ($cam1S+".depthOfField") 0;
     move ($cX - $maxDim*0.5) ($cY - $maxDim*2) ($cZ + $maxDim*1.5) $cam1T;
 
-    string $cam2T = `createNode transform -n "CAM_Studio_Side" -p $mainGroup`;
+    string $cam2T = `createNode transform -n "CAM_Studio_Side" -p $perspGroup`;
     string $cam2S = `createNode camera -n "CAM_Studio_SideShape" -p $cam2T`;
     setAttr ($cam2S+".focalLength") 35; setAttr ($cam2S+".depthOfField") 0;
     move ($cX + $maxDim*1.3) ($cY - $maxDim*1.5) ($cZ + $maxDim*1.0) $cam2T;
 
-    string $cam3T = `createNode transform -n "CAM_Studio_High" -p $mainGroup`;
+    string $cam3T = `createNode transform -n "CAM_Studio_High" -p $perspGroup`;
     string $cam3S = `createNode camera -n "CAM_Studio_HighShape" -p $cam3T`;
     setAttr ($cam3S+".focalLength") 35; setAttr ($cam3S+".depthOfField") 0;
     move $cX ($cY - $maxDim*1.5) ($cZ + $maxDim*1.8) $cam3T;
 
-    // --- 4. AIM & FRAMING ---
-    // Locator parented bajo $mainGroup: si falla antes de ser eliminado,
-    // queda dentro del grupo y se limpia en la próxima ejecución.
+    // --- 4. CÁMARAS ORTOGRÁFICAS (grupo aislado del de perspectiva) ---
+    string $orthoGroup = `group -empty -name "CamsOrtho_GRP" -p $mainGroup`;
+
+    // Top: posición directamente sobre el sujeto — el aim resultante es -Z exacto,
+    // colineal con worldUpVector Z-Up. worldUpVector Y evita la singularidad.
+    string $camTopT = `createNode transform -n "CAM_Ortho_Top"   -p $orthoGroup`;
+    string $camTopS = `createNode camera   -n "CAM_Ortho_TopShape"   -p $camTopT`;
+    setAttr ($camTopS+".orthographic") 1;
+    setAttr ($camTopS+".orthoWidth") ($maxDim * 1.5);
+    move $cX $cY ($cZ + $maxDim * 5) $camTopT;
+
+    string $camFrontT = `createNode transform -n "CAM_Ortho_Front" -p $orthoGroup`;
+    string $camFrontS = `createNode camera   -n "CAM_Ortho_FrontShape" -p $camFrontT`;
+    setAttr ($camFrontS+".orthographic") 1;
+    setAttr ($camFrontS+".orthoWidth") ($maxDim * 1.5);
+    move $cX ($cY - $maxDim * 5) $cZ $camFrontT;
+
+    string $camSideT = `createNode transform -n "CAM_Ortho_Side"  -p $orthoGroup`;
+    string $camSideS = `createNode camera   -n "CAM_Ortho_SideShape"  -p $camSideT`;
+    setAttr ($camSideS+".orthographic") 1;
+    setAttr ($camSideS+".orthoWidth") ($maxDim * 1.5);
+    move ($cX + $maxDim * 5) $cY $cZ $camSideT;
+
+    // --- 5. AIM & FRAMING ---
     string $loc[] = `spaceLocator -p $cX $cY $cZ`;
     parent $loc[0] $mainGroup;
-    string $objectsToAim[] = {$cam1T, $cam2T, $cam3T, $keyT, $fillT, $rimT};
-    for ($obj in $objectsToAim) {
+
+    // Perspectiva + luces + Front/Side ortho: worldUpVector Z (Z-Up; sus aims
+    // nunca son colineales con Z en las posiciones actuales).
+    string $toAimZ[] = {$cam1T, $cam2T, $cam3T, $keyT, $fillT, $rimT, $camFrontT, $camSideT};
+    for ($obj in $toAimZ) {
         string $aim[] = `aimConstraint -aimVector 0 0 -1 -upVector 0 1 0 -worldUpType "vector" -worldUpVector 0 0 1 $loc[0] $obj`;
         delete $aim[0];
     }
+
+    // Top ortho: aim -Z exacto → worldUpVector debe ser Y para evitar gimbal lock.
+    string $aimTop[] = `aimConstraint -aimVector 0 0 -1 -upVector 0 1 0 -worldUpType "vector" -worldUpVector 0 1 0 $loc[0] $camTopT`;
+    delete $aimTop[0];
+
     delete $loc[0];
 
-    select -r $validMeshes;
+    // select antes de cada viewFit: previene pérdida de selección por side effects
+    // de lookThru en ciertos entornos (plugins de viewport, batch mode).
     string $panels[] = `getPanel -type "modelPanel"`;
     if (size($panels) > 0) {
         string $origCam = `modelPanel -q -camera $panels[0]`;
-        lookThru $panels[0] $cam1T; viewFit -fitFactor 0.5;
-        lookThru $panels[0] $cam2T; viewFit -fitFactor 0.5;
-        lookThru $panels[0] $cam3T; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $cam1T;    select -r $validMeshes; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $cam2T;    select -r $validMeshes; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $cam3T;    select -r $validMeshes; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $camTopT;  select -r $validMeshes; viewFit -fitFactor 0.85;
+        lookThru $panels[0] $camFrontT; select -r $validMeshes; viewFit -fitFactor 0.85;
+        lookThru $panels[0] $camSideT; select -r $validMeshes; viewFit -fitFactor 0.85;
         lookThru $panels[0] $origCam;
     }
 

@@ -1,6 +1,6 @@
 # 🎬 LookDev Studio Pro
 
-![Version](https://img.shields.io/badge/version-1.0.5-blue.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)
 ![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
@@ -18,7 +18,8 @@ Reduce un proceso de setup manual de 15-20 minutos a **un solo clic (< 5 segundo
 * **Escalamiento Procedimental Inteligente:** Lee la selección activa del artista para calcular el Bounding Box exacto del asset (con fallback a toda la escena si no hay selección) y genera un ciclorama proporcional a su escala.
 * **Iluminación Arnold Nativa:** Instancia un rig de tres luces cinemáticas (`aiAreaLight`) — Key, Fill, Rim — con jerarquía de intensidad correcta (Key 360 > Rim 144 > Fill 24) más un `aiSkyDomeLight` de ambiente. Todos los tipos de luz cuentan con guard de plugin `mtoa` y fallback a luces nativas de Maya.
 * **Ciclorama Shadow Catcher:** El ciclorama usa `aiShadowMatte` con `backgroundColor` RGB 0.596 — color de fondo exacto e independiente de la iluminación, sin gradientes ni variaciones por posición de luces. El asset proyecta sombras perfectas sobre él como si fuera un suelo físico real. Fallback a `lambert` si mtoa no está cargado.
-* **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (`CAM_Studio_Main`, `CAM_Studio_Side`, `CAM_Studio_High`) apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
+* **Tri-Cam + Ortho Setup Automático:** Genera y encuadra seis cámaras de producción: tres de perspectiva (`CAM_Studio_Main`, `CAM_Studio_Side`, `CAM_Studio_High`) en `CamsPersp_GRP`, y tres ortográficas (`CAM_Ortho_Top`, `CAM_Ortho_Front`, `CAM_Ortho_Side`) en `CamsOrtho_GRP`. Todas apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
+* **Arnold Render Presets:** Tres presets de render de 1-clic — Draft 540p (AA×3), Review 720p (AA×4), Final 1080p (AA×6) — con muestras GI calibradas por nivel. Ajustan resolución y Arnold Render Options en un solo comando.
 * **Z-Up Pipeline Ready:** Construcción nativa en coordenadas Z-Up para mantener la consistencia milimétrica con exportaciones a Unreal Engine.
 * **Undo de Un Solo Paso:** Todo el setup (~30 nodos) queda envuelto en un `undoInfo` chunk, permitiendo deshacer con un único `Ctrl+Z`.
 * **Naming Convention Compliance:** Los nodos del rig respetan la convención `_LGT` definida en `NamingConvention_Guide.md`, pasando el QA check de nomenclatura del pipeline.
@@ -91,6 +92,14 @@ https://github.com/user-attachments/assets/0ce183ec-5260-474c-bce9-671c765813e2
 
 ## 📋 Changelog
 
+### v1.1.0
+- **Nuevo:** Tres cámaras ortográficas (Top, Front, Side) en sub-grupo `CamsOrtho_GRP`, aislado del grupo de perspectiva `CamsPersp_GRP`.
+- **Nuevo:** `applyRenderPreset()` — tres presets Arnold de 1-clic con resolución + muestras GI calibradas: Draft 540p, Review 720p, Final 1080p.
+- **Nuevo:** Botones de Render Presets integrados en la UI.
+- **Fix plausible #7:** `CAM_Ortho_Top` usa `worldUpVector 0 1 0` — su aim es `-Z` exacto, colineal con el worldUp Z-Up; el cambio elimina la singularidad del aimConstraint en esa cámara.
+- **Fix plausible #10:** Guard `sets -isMember defaultLightSet` antes de cada `connectAttr` — evita doble conexión en MtoA 4+ que auto-registra `aiAreaLight`.
+- **Fix plausible #G4:** `select -r $validMeshes` antes de cada `viewFit` en el loop — previene pérdida de selección por side effects de `lookThru` en ciertos entornos.
+
 ### v1.0.5
 - **Fix crítico:** Toda la validación movida pre-`undoInfo -openChunk` — un error temprano ya no deja el chunk abierto y corrompe el undo de la sesión.
 - **Fix alto:** `listRelatives -allDescendents` ahora pasa `-ni` — intermediate objects (deformadores, blend shapes) excluidos del bounding box.
@@ -144,7 +153,7 @@ Este repositorio se encuentra en desarrollo activo. La arquitectura modular actu
 
 ### 📍 Fase 1: Expansión de UI y Render (Ciclo v1.x.x)
 
-- [ ] **v1.1.0 (Camera & Render Update):** Generación de vistas ortográficas (Top, Front, Side) aisladas del grupo de perspectiva. Inyección de presets de Arnold Render Settings de 1-clic (Draft 540p, Review 720p, Final 1080p).
+- [x] **v1.1.0 (Camera & Render Update):** Generación de vistas ortográficas (Top, Front, Side) aisladas del grupo de perspectiva. Inyección de presets de Arnold Render Settings de 1-clic (Draft 540p, Review 720p, Final 1080p).
 - [ ] **v1.2.0 (The MetaHuman UI Update):** Panel visual de presets de estudio. Selectores de temperatura de color (Kelvin) para el light rig. Selector de color difuso para el ciclorama y menús para HDRIs personalizados.
 
 ### 📍 Fase 2: Refactorización y Automatización (Ciclo v2.x.x)
