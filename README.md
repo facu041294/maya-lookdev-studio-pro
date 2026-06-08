@@ -1,6 +1,6 @@
 # 🎬 LookDev Studio Pro
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0.3-blue.svg)
 ![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
@@ -16,7 +16,7 @@ Reduce un proceso de setup manual de 15-20 minutos a **un solo clic (< 5 segundo
 ## ✨ Características Principales (Core Features)
 
 * **Escalamiento Procedimental Inteligente:** Lee la selección activa del artista para calcular el Bounding Box exacto del asset (con fallback a toda la escena si no hay selección) y genera un ciclorama proporcional a su escala.
-* **Iluminación Arnold Nativa:** Instancia un rig de tres luces cinemáticas (`aiAreaLight`) — Key, Fill, Rim — con jerarquía de intensidad correcta (Key 300 > Rim 120 > Fill 20) más un `aiSkyDomeLight` de ambiente. Todos los tipos de luz cuentan con guard de plugin `mtoa` y fallback a luces nativas de Maya.
+* **Iluminación Arnold Nativa:** Instancia un rig de tres luces cinemáticas (`aiAreaLight`) — Key, Fill, Rim — con jerarquía de intensidad correcta (Key 360 > Rim 144 > Fill 24) más un `aiSkyDomeLight` de ambiente. Todos los tipos de luz cuentan con guard de plugin `mtoa` y fallback a luces nativas de Maya.
 * **Material Físicamente Correcto:** El ciclorama usa `aiStandardSurface` con `specularRoughness` alto para una respuesta de luz suave y sin artefactos en Arnold. Fallback a `lambert` si mtoa no está cargado.
 * **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (Main, Side, High) apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
 * **Z-Up Pipeline Ready:** Construcción nativa en coordenadas Z-Up para mantener la consistencia milimétrica con exportaciones a Unreal Engine.
@@ -32,7 +32,7 @@ Esta herramienta opera como un **Gatekeeper (Guardián)** pre-integración, dise
 * **Jerarquía Inmutable:** Crea el grupo central `PhotoStudio_SETUP_GRP` aislando el entorno del asset de producción, permitiendo exportaciones limpias sin residuos en el Outliner.
 * **Idempotencia (Safe Mode):** Limpia automáticamente ejecuciones anteriores y nodos huérfanos. Garantiza un entorno de trabajo predecible sin *Name Clashing*.
 * **Selección Defensiva:** Respeta la selección activa del artista para el cálculo del bounding box, incluyendo jerarquías grupadas de cualquier profundidad. Si no hay selección, toma todas las mallas de la escena (excluyendo el ciclorama propio del tool).
-* **Light Linking Correcto:** Las luces se integran al `defaultLightSet` mediante la API de alto nivel `sets -addElement`, evitando conexiones duplicadas y conflictos con escenas que tienen light linking preexistente.
+* **Light Linking Correcto:** Las luces se integran al `defaultLightSet` mediante `connectAttr -nextAvailable`, el único mecanismo que funciona de forma fiable para nodos DAG (transforms) en todas las versiones de Maya.
 
 ---
 
@@ -41,16 +41,19 @@ Esta herramienta opera como un **Gatekeeper (Guardián)** pre-integración, dise
 1. **Traversal de Jerarquía Agrupada:**
    `ls -sl -dag -type mesh` no recursa de forma fiable en grupos anidados de múltiples niveles. Se usa `listRelatives -allDescendents -type mesh` sobre la selección, que garantiza el recorrido completo del DAG independientemente de la profundidad del grupo.
 
-2. **Detección de Crease Post-Extrusión:**
+2. **Captura de Selección Antes del Grupo Raíz:**
+   `group -empty` selecciona automáticamente el nodo recién creado, pisando la selección original del artista. La selección se captura en `$sel[]` en la primera línea del procedimiento, antes de cualquier operación de creación de nodos.
+
+3. **Detección de Crease Post-Extrusión:**
    Después de `polyExtrudeEdge`, los índices de arista se reasignan. En lugar de reutilizar el índice `e[3]` (que ya no apunta al crease), se usa `polyListComponentConversion -toEdge -internal` sobre las dos caras resultantes para encontrar siempre la arista interior correcta antes del `polyBevel`.
 
-3. **Encuadre de Cámaras (`viewFit`):**
+4. **Encuadre de Cámaras (`viewFit`):**
    `viewFit` solo tiene efecto sobre la cámara activa en un panel. El script cicla cada cámara de studio por el viewport activo via `lookThru`, ejecuta el fit, y restaura la cámara original del artista.
 
-4. **Guard de Plugin `mtoa`:**
+5. **Guard de Plugin `mtoa`:**
    Tanto el tipo de luz (`aiAreaLight` vs `areaLight`) como el shader del ciclorama (`aiStandardSurface` vs `lambert`) se resuelven en runtime con `pluginInfo -q -loaded "mtoa"`, haciendo el script funcional en instalaciones sin Arnold.
 
-5. **Optimización de AimConstraints:**
+6. **Optimización de AimConstraints:**
    Cámaras y luces se unificaron en un único array procesado en bucle, apuntando a un locator temporal que se purga de la escena al finalizar.
 
 ---
@@ -81,6 +84,13 @@ https://github.com/user-attachments/assets/0ce183ec-5260-474c-bce9-671c765813e2
 ---
 
 ## 📋 Changelog
+
+### v1.0.3
+- **Fix:** Selección capturada antes de `group -empty` para evitar que el nodo raíz pise la selección del artista.
+- **Fix:** Light linking corregido — `sets -addElement` no acepta transforms como miembro; reemplazado por `connectAttr -nextAvailable` sobre `defaultLightSet.dagSetMembers`.
+- **Ajuste:** Intensidades de luces +20% — Key 360 / Fill 24 / Rim 144.
+- **Ajuste:** Distancias de luces reducidas ~25% para mayor proximidad al asset.
+- **Ajuste:** Posición de cámaras calibrada con asset de referencia (maxDim 6.23) — `Studio_Cam_Side` X 1.5→1.3, `Studio_Cam_High` Z 3.0→1.8.
 
 ### v1.0.2
 - **Fix:** Detección de mallas en grupos anidados — `ls -sl -dag` reemplazado por `listRelatives -allDescendents -type mesh` para recorrer jerarquías de cualquier profundidad.
