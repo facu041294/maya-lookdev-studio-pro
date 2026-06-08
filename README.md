@@ -1,6 +1,6 @@
 # 🎬 LookDev Studio Pro
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0.2-blue.svg)
 ![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
@@ -15,44 +15,54 @@ Reduce un proceso de setup manual de 15-20 minutos a **un solo clic (< 5 segundo
 
 ## ✨ Características Principales (Core Features)
 
-* **Escalamiento Procedimental Inteligente:** Calcula el Bounding Box exacto del mesh y genera un ciclorama (Infinity Background) proporcional a la escala del asset.
-* **Iluminación Física (Arnold):** Instancia y conecta al *Node Graph* un esquema de luces cinemáticas (Key, Fill, Rim) mediante *Area Lights* escaladas dinámicamente, respaldadas por un SkyDome.
-* **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (Main, Side, High) apuntadas al centro de masa del objeto, listas para *Contact Sheets*.
+* **Escalamiento Procedimental Inteligente:** Lee la selección activa del artista para calcular el Bounding Box exacto del asset (con fallback a toda la escena si no hay selección) y genera un ciclorama proporcional a su escala.
+* **Iluminación Arnold Nativa:** Instancia un rig de tres luces cinemáticas (`aiAreaLight`) — Key, Fill, Rim — con jerarquía de intensidad correcta (Key 300 > Rim 120 > Fill 20) más un `aiSkyDomeLight` de ambiente. Todos los tipos de luz cuentan con guard de plugin `mtoa` y fallback a luces nativas de Maya.
+* **Material Físicamente Correcto:** El ciclorama usa `aiStandardSurface` con `specularRoughness` alto para una respuesta de luz suave y sin artefactos en Arnold. Fallback a `lambert` si mtoa no está cargado.
+* **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (Main, Side, High) apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
 * **Z-Up Pipeline Ready:** Construcción nativa en coordenadas Z-Up para mantener la consistencia milimétrica con exportaciones a Unreal Engine.
+* **Undo de Un Solo Paso:** Todo el setup (~30 nodos) queda envuelto en un `undoInfo` chunk, permitiendo deshacer con un único `Ctrl+Z`.
+* **Naming Convention Compliance:** Los nodos del rig respetan la convención `_LGT` definida en `NamingConvention_Guide.md`, pasando el QA check de nomenclatura del pipeline.
 
 ---
 
 ## 🛡️ Pipeline Integration & Pre-Mortem Defenses
+
 Esta herramienta opera como un **Gatekeeper (Guardián)** pre-integración, diseñada con un enfoque defensivo contra los fallos más comunes de un pipeline:
 
-* **Jerarquía Inmutable:** Previene el desorden del Outliner creando el grupo central `PhotoStudio_SETUP_GRP`. Aísla el entorno del asset de producción, permitiendo exportaciones limpias sin "basura" residual.
-* **Idempotencia (Safe Mode):** Limpia automáticamente ejecuciones anteriores y nodos huérfanos. Garantiza un entorno de trabajo predecible sin choques de nombres (*Name Clashing*).
-* **Arnold Light Linking Force:** Evita los "Renders Negros" forzando la conexión de las luces a bajo nivel directamente al `defaultLightSet.dagSetMembers`.
+* **Jerarquía Inmutable:** Crea el grupo central `PhotoStudio_SETUP_GRP` aislando el entorno del asset de producción, permitiendo exportaciones limpias sin residuos en el Outliner.
+* **Idempotencia (Safe Mode):** Limpia automáticamente ejecuciones anteriores y nodos huérfanos. Garantiza un entorno de trabajo predecible sin *Name Clashing*.
+* **Selección Defensiva:** Respeta la selección activa del artista para el cálculo del bounding box, incluyendo jerarquías grupadas de cualquier profundidad. Si no hay selección, toma todas las mallas de la escena (excluyendo el ciclorama propio del tool).
+* **Light Linking Correcto:** Las luces se integran al `defaultLightSet` mediante la API de alto nivel `sets -addElement`, evitando conexiones duplicadas y conflictos con escenas que tienen light linking preexistente.
 
 ---
 
-## 🛠️ Bitácora de Desarrollo (Tech Notes)
-El desarrollo de este script implicó resolver inconsistencias históricas en la arquitectura interna de Maya:
+## 🛠️ Decisiones Técnicas Clave
 
-1. **Topología en Z-Up y Extrusiones (Prevención del "Techo Negro"):**
-   Al intentar levantar la pared del ciclorama en Z-Up, `polyExtrudeEdge` en espacio local generaba geometría horizontal. Se forzó la transformación en espacio global (`-ws -wd`) y se identificó algorítmicamente la arista instanciada correcta (`e[3]`).
-2. **Tipos de Retorno Inconsistentes en MEL:**
-   Se reemplazó el uso obsoleto de `shadingNode` por la creación explícita vía `createNode transform` y `createNode areaLight`, asegurando el control absoluto de las variables de tipo *Shape* y sus jerarquías.
-3. **El Comportamiento de `viewFit`:**
-   Se aisló la selección en un *array* temporal de mallas válidas (`$validMeshes`), excluyendo expresamente al ciclorama generado para evitar que Maya invirtiera la cámara al intentar encuadrar un fondo infinito.
-4. **Optimización de AimConstraints:**
-   Se unificaron todas las entidades de render en un *Array* procesado mediante un bucle `for`, apuntando hacia un único *locator* temporal que luego es purgado de la memoria.
+1. **Traversal de Jerarquía Agrupada:**
+   `ls -sl -dag -type mesh` no recursa de forma fiable en grupos anidados de múltiples niveles. Se usa `listRelatives -allDescendents -type mesh` sobre la selección, que garantiza el recorrido completo del DAG independientemente de la profundidad del grupo.
+
+2. **Detección de Crease Post-Extrusión:**
+   Después de `polyExtrudeEdge`, los índices de arista se reasignan. En lugar de reutilizar el índice `e[3]` (que ya no apunta al crease), se usa `polyListComponentConversion -toEdge -internal` sobre las dos caras resultantes para encontrar siempre la arista interior correcta antes del `polyBevel`.
+
+3. **Encuadre de Cámaras (`viewFit`):**
+   `viewFit` solo tiene efecto sobre la cámara activa en un panel. El script cicla cada cámara de studio por el viewport activo via `lookThru`, ejecuta el fit, y restaura la cámara original del artista.
+
+4. **Guard de Plugin `mtoa`:**
+   Tanto el tipo de luz (`aiAreaLight` vs `areaLight`) como el shader del ciclorama (`aiStandardSurface` vs `lambert`) se resuelven en runtime con `pluginInfo -q -loaded "mtoa"`, haciendo el script funcional en instalaciones sin Arnold.
+
+5. **Optimización de AimConstraints:**
+   Cámaras y luces se unificaron en un único array procesado en bucle, apuntando a un locator temporal que se purga de la escena al finalizar.
 
 ---
 
 ## 🚀 Instalación y Uso
 
-**Sin dependencias.** MEL puro. No requiere Python ni plugins externos (solo el plugin nativo `mtoa` cargado).
+**Sin dependencias.** MEL puro. No requiere Python ni plugins externos (solo el plugin nativo `mtoa` para el modo Arnold completo).
 
 1. Abre el **Script Editor** en Autodesk Maya.
 2. Pega el código de `/src/LookDevStudioPro.mel`.
 3. Selecciona todo el texto y arrástralo a tu *Shelf* para crear un botón.
-4. **Ejecución:** Selecciona tu asset (agrupado con `Ctrl+G`), presiona el botón y el entorno se generará al instante.
+4. **Ejecución:** Selecciona tu asset en el viewport, presiona el botón y el entorno se generará al instante. Si no hay nada seleccionado, el script tomará todas las mallas de la escena.
 
 <video width="100%" controls>
   <source src="./examples/video/Previewlookdevstudioprov1.0.mp4" type="video/mp4">
@@ -64,8 +74,31 @@ https://github.com/user-attachments/assets/0ce183ec-5260-474c-bce9-671c765813e2
 ---
 
 ## 📁 Documentación Anexa
-Para entender el flujo completo de validación de este script dentro de la producción, consulta nuestra documentación de pipeline:
+
 * [Guía de Nomenclatura y Estructura Work/Publish (TAR-021)](./docs/NamingConvention_Guide.md)
+* [Auditoría Técnica — 10 bugs identificados y corregidos (v1.0.1)](./Auditoria.md)
+
+---
+
+## 📋 Changelog
+
+### v1.0.2
+- **Fix:** Detección de mallas en grupos anidados — `ls -sl -dag` reemplazado por `listRelatives -allDescendents -type mesh` para recorrer jerarquías de cualquier profundidad.
+
+### v1.0.1
+- **Fix crítico:** Bounding box ahora respeta la selección activa del artista (#1)
+- **Fix alto:** Luces principales migradas a `aiAreaLight` nativo de Arnold (#2)
+- **Fix alto:** Crease edge del ciclorama identificado correctamente post-extrusión via `polyListComponentConversion` (#3)
+- **Fix medio:** `viewFit` de las cámaras de studio funciona via `lookThru` por panel (#4)
+- **Fix medio:** Material del ciclorama migrado a `aiStandardSurface` (#5)
+- **Fix medio:** Todo el setup envuelto en `undoInfo` chunk — undo de un solo paso (#6)
+- **Fix medio:** Jerarquía de intensidades 3-point corregida: Key 300 / Fill 20 / Rim 120 (#7)
+- **Fix medio:** Light linking via `sets -addElement` en lugar de `connectAttr` raw (#8)
+- **Fix menor:** Luces renombradas a convención `_LGT` según `NamingConvention_Guide.md` (#9)
+- **Fix menor:** Guard de plugin `mtoa` aplicado a todas las luces principales (#10)
+
+### v1.0.0
+- Release inicial: ciclorama procedimental, rig de 3 luces, tri-cam setup, Z-Up pipeline.
 
 ---
 
@@ -74,25 +107,18 @@ Para entender el flujo completo de validación de este script dentro de la produ
 Este repositorio se encuentra en desarrollo activo. La arquitectura modular actual en MEL sienta las bases para escalar la herramienta hacia una suite de pipeline completa.
 
 ### 📍 Fase 1: Expansión de UI y Render (Ciclo v1.x.x)
-El objetivo a corto plazo es mejorar la flexibilidad del *setup* y la experiencia de usuario (UX) para el artista, inspirándonos en entornos de LookDev de nueva generación.
 
-- [ ] **v1.1.0 (Camera & Render Update):** - Generación de un segundo grupo de cámaras para **vistas ortográficas** (Top, Front, Side) aisladas del grupo de perspectiva.
-  - Implementación de inyección de código MEL en los *Render Settings* de Arnold para ofrecer **3 presets de renderizado de 1-clic** (Draft 540p, Review 720p, Final 1080p sin ruido).
-- [ ] **v1.2.0 (The MetaHuman UI Update):** - Rediseño de la interfaz para incluir un panel visual de presets de estudio.
-  - Selectores de temperatura de color (Kelvin) para el *Light Rig*.
-  - Selector interactivo de color difuso para el ciclorama y menús desplegables para HDRIs personalizados integrados al SkyDome.
+- [ ] **v1.1.0 (Camera & Render Update):** Generación de vistas ortográficas (Top, Front, Side) aisladas del grupo de perspectiva. Inyección de presets de Arnold Render Settings de 1-clic (Draft 540p, Review 720p, Final 1080p).
+- [ ] **v1.2.0 (The MetaHuman UI Update):** Panel visual de presets de estudio. Selectores de temperatura de color (Kelvin) para el light rig. Selector de color difuso para el ciclorama y menús para HDRIs personalizados.
 
 ### 📍 Fase 2: Refactorización y Automatización (Ciclo v2.x.x)
-Evolución del núcleo para operaciones masivas y sin interfaz gráfica (*headless*). Aumento de versión MAYOR debido a la ruptura de compatibilidad con el código MEL heredado.
 
-- [ ] **v2.0.0 (Python Core Migration):** Traducción del motor lógico de MEL a **Python (PyMEL / maya.cmds)**. Esto permitirá ejecutar el script en modo *batch* mediante consola, generando y renderizando estudios de LookDev para cientos de assets en segundo plano.
+- [ ] **v2.0.0 (Python Core Migration):** Traducción del motor lógico a **Python (PyMEL / maya.cmds)** para ejecución en modo *batch*, generando y renderizando estudios para cientos de assets en segundo plano.
 
 ### 📍 Fase 3: Ecosistema de Pipeline End-to-End (Ciclo v3.x.x)
-LookDev Studio Pro absorberá módulos satélite para convertirse en un validador completo desde el modelado hasta el motor. Nueva arquitectura orientada a la ingesta externa.
 
-- [ ] **v3.0.0 (Smart UV & PBR Ingest):** - Integración de algoritmos de corrección de UVs (orientación vertical forzada en eje Z y detección de cortes lógicos).
-  - Módulo de Exportación Automática (USD/FBX) sanitizada.
-  - **Material Auto-Linker:** Script de escucha que recibe mapas PBR (Albedo, Normal, ORM) exportados desde Substance Painter y los conecta automáticamente al *aiStandardSurface* dentro del entorno de LookDev generado.
+- [ ] **v3.0.0 (Smart UV & PBR Ingest):** Integración de corrección de UVs, exportación automática USD/FBX sanitizada, y **Material Auto-Linker** para mapas PBR exportados desde Substance Painter.
 
 ---
+
 *Desarrollado por Facundo Villarreal — Lead Cinematic Technical Artist.*
