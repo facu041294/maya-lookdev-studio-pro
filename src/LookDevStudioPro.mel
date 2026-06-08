@@ -59,7 +59,7 @@ global proc createFullStudio() {
     float $zMin = $bb[2];
 
     // --- 2. CICLORAMA ---
-    string $plane[] = `polyPlane -w ($maxDim*14) -h ($maxDim*8) -sx 1 -sy 1 -ax 0 0 1 -name "Cyclorama_GEO"`;
+    string $plane[] = `polyPlane -w ($maxDim*24) -h ($maxDim*8) -sx 1 -sy 1 -ax 0 0 1 -name "Cyclorama_GEO"`;
     move $cX ($cY + $maxDim*2) $zMin $plane[0];
 
     select -r ($plane[0] + ".e[3]");
@@ -72,16 +72,17 @@ global proc createFullStudio() {
     polySoftEdge -angle 180 $plane[0];
     parent $plane[0] $mainGroup;
 
-    // Bug #5: use aiStandardSurface for a physically correct Arnold cyclorama
+    // aiShadowMatte: true solid-color background that still receives object shadows.
+    // Unlike aiStandardSurface, backgroundColor is lighting-independent — no gradients.
+    // Fallback to lambert for non-Arnold installs.
     string $cycSG = `sets -renderable true -noSurfaceShader true -empty -name "Cyclorama_SG"`;
     string $cycMat = "";
     if (`pluginInfo -q -loaded "mtoa"`) {
-        $cycMat = `shadingNode -asShader aiStandardSurface -name "Cyclorama_MAT"`;
-        setAttr ($cycMat + ".baseColor") -type double3 0.15 0.15 0.15;
-        setAttr ($cycMat + ".specularRoughness") 0.9;
+        $cycMat = `shadingNode -asShader aiShadowMatte -name "Cyclorama_MAT"`;
+        setAttr ($cycMat + ".backgroundColor") -type double3 0.596 0.596 0.596;
     } else {
         $cycMat = `shadingNode -asShader lambert -name "Cyclorama_MAT"`;
-        setAttr ($cycMat + ".color") -type double3 0.15 0.15 0.15;
+        setAttr ($cycMat + ".color") -type double3 0.596 0.596 0.596;
     }
     connectAttr -f ($cycMat + ".outColor") ($cycSG + ".surfaceShader");
     sets -e -forceElement $cycSG $plane[0];
