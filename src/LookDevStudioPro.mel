@@ -9,81 +9,119 @@ button -label "Generar Estudio" -command "createFullStudio()" -height 40 -backgr
 showWindow photoStudioWindow;
 
 global proc createFullStudio() {
+    undoInfo -openChunk;  // Bug #6: wrap all node creation in a single undo chunk
+
     // --- 0. PREVENCIÓN DE ERRORES ---
     if (`objExists "PhotoStudio_SETUP_GRP"`) delete "PhotoStudio_SETUP_GRP";
     string $mainGroup = `group -empty -name "PhotoStudio_SETUP_GRP"`;
 
     // --- 1. ANÁLISIS DE GEOMETRÍA ---
-    string $allMeshes[] = `ls -type "mesh"`;
+    // Bug #1: respect user selection; fall back to all scene meshes if nothing selected
+    string $sourceMeshes[];
+    string $sel[] = `ls -sl`;
+    if (size($sel) > 0) {
+        $sourceMeshes = `ls -sl -dag -type "mesh"`;
+    } else {
+        $sourceMeshes = `ls -type "mesh"`;
+    }
     string $validMeshes[];
-    for ($mesh in $allMeshes) {
+    for ($mesh in $sourceMeshes) {
         string $parent[] = `listRelatives -p $mesh`;
         if ($parent[0] != "Cyclorama_GEO") $validMeshes[size($validMeshes)] = $mesh;
     }
-    
-    if (!size($validMeshes)) { delete $mainGroup; error "Sin mallas válidas."; }
-    select -r $validMeshes; 
-    
+
+    if (!size($validMeshes)) {
+        undoInfo -closeChunk;
+        delete $mainGroup;
+        error "Sin mallas válidas.";
+    }
+    select -r $validMeshes;
+
     float $bb[] = `exactWorldBoundingBox`;
     float $maxDim = max($bb[3]-$bb[0], max($bb[4]-$bb[1], $bb[5]-$bb[2]));
-    if ($maxDim <= 0) $maxDim = 10.0; 
-    
+    if ($maxDim <= 0) $maxDim = 10.0;
+
     float $cX = ($bb[0] + $bb[3]) / 2.0;
     float $cY = ($bb[1] + $bb[4]) / 2.0;
     float $cZ = ($bb[2] + $bb[5]) / 2.0;
-    float $zMin = $bb[2]; 
+    float $zMin = $bb[2];
 
-    // --- 2. CICLORAMA Y MATERIAL INDEPENDIENTE ---
+    // --- 2. CICLORAMA ---
     string $plane[] = `polyPlane -w ($maxDim*14) -h ($maxDim*8) -sx 1 -sy 1 -ax 0 0 1 -name "Cyclorama_GEO"`;
-    move $cX ($cY + $maxDim*2) $zMin $plane[0]; 
-    
+    move $cX ($cY + $maxDim*2) $zMin $plane[0];
+
     select -r ($plane[0] + ".e[3]");
     polyExtrudeEdge -keepFacesTogether 1;
     move -r -ws -wd 0 0 ($maxDim * 8);
-    
-    polyBevel -offset ($maxDim * 1.5) -segments 32 -autoFit 1 ($plane[0] + ".e[3]");
+    // Bug #3: after polyExtrudeEdge the topology changes; select the crease by
+    // finding the one interior edge shared between floor (f[0]) and wall (f[1])
+    string $creaseEdges[] = `polyListComponentConversion -toEdge -internal ($plane[0] + ".f[0]") ($plane[0] + ".f[1]")`;
+    polyBevel -offset ($maxDim * 1.5) -segments 32 -autoFit 1 $creaseEdges;
     polySoftEdge -angle 180 $plane[0];
     parent $plane[0] $mainGroup;
 
-    // Creación y Asignación de Material (Matte Grey)
-    string $cycMat = `shadingNode -asShader lambert -name "Cyclorama_MAT"`;
-    setAttr ($cycMat + ".color") -type double3 0.15 0.15 0.15; 
+    // Bug #5: use aiStandardSurface for a physically correct Arnold cyclorama
     string $cycSG = `sets -renderable true -noSurfaceShader true -empty -name "Cyclorama_SG"`;
+    string $cycMat = "";
+    if (`pluginInfo -q -loaded "mtoa"`) {
+        $cycMat = `shadingNode -asShader aiStandardSurface -name "Cyclorama_MAT"`;
+        setAttr ($cycMat + ".baseColor") -type double3 0.15 0.15 0.15;
+        setAttr ($cycMat + ".specularRoughness") 0.9;
+    } else {
+        $cycMat = `shadingNode -asShader lambert -name "Cyclorama_MAT"`;
+        setAttr ($cycMat + ".color") -type double3 0.15 0.15 0.15;
+    }
     connectAttr -f ($cycMat + ".outColor") ($cycSG + ".surfaceShader");
     sets -e -forceElement $cycSG $plane[0];
 
-    // --- 3. ILUMINACIÓN FÍSICA (Conexión Directa al Node Graph) ---
-    string $keyT = `createNode transform -n "KeyLight" -p $mainGroup`;
-    string $keyS = `createNode areaLight -n "KeyLightShape" -p $keyT`;
-    
-    connectAttr -nextAvailable ($keyT + ".instObjGroups") "defaultLightSet.dagSetMembers";
-    setAttr ($keyS+".intensity") 240; setAttr -type double3 ($keyS+".color") 1 0.85 0.6;
-    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $keyT; 
+    // --- 3. ILUMINACIÓN FÍSICA ---
+    // Bug #2: use aiAreaLight (not Maya native areaLight) for Arnold attributes
+    // Bug #9: rename to _LGT suffix per NamingConvention_Guide.md
+    // Bug #10: guard area light type behind mtoa plugin check
+    string $keyT = ""; string $keyS = "";
+    string $fillT = ""; string $fillS = "";
+    string $rimT = ""; string $rimS = "";
+
+    if (`pluginInfo -q -loaded "mtoa"`) {
+        $keyT  = `createNode transform   -n "Key_LGT"       -p $mainGroup`;
+        $keyS  = `createNode aiAreaLight -n "Key_LGTShape"  -p $keyT`;
+        $fillT = `createNode transform   -n "Fill_LGT"      -p $mainGroup`;
+        $fillS = `createNode aiAreaLight -n "Fill_LGTShape" -p $fillT`;
+        $rimT  = `createNode transform   -n "Rim_LGT"       -p $mainGroup`;
+        $rimS  = `createNode aiAreaLight -n "Rim_LGTShape"  -p $rimT`;
+    } else {
+        $keyT  = `createNode transform -n "Key_LGT"       -p $mainGroup`;
+        $keyS  = `createNode areaLight -n "Key_LGTShape"  -p $keyT`;
+        $fillT = `createNode transform -n "Fill_LGT"      -p $mainGroup`;
+        $fillS = `createNode areaLight -n "Fill_LGTShape" -p $fillT`;
+        $rimT  = `createNode transform -n "Rim_LGT"       -p $mainGroup`;
+        $rimS  = `createNode areaLight -n "Rim_LGTShape"  -p $rimT`;
+    }
+    // Bug #8: use high-level sets API instead of raw connectAttr to defaultLightSet
+    sets -addElement $keyT  defaultLightSet;
+    sets -addElement $fillT defaultLightSet;
+    sets -addElement $rimT  defaultLightSet;
+
+    // Bug #7: Key 300 > Rim 120 > Fill 20 (classic 3-point hierarchy)
+    setAttr ($keyS+".intensity") 300; setAttr -type double3 ($keyS+".color") 1 0.85 0.6;
+    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $keyT;
     move ($cX + $maxDim*2) ($cY - $maxDim*2) ($cZ + $maxDim*2) $keyT;
 
-    string $fillT = `createNode transform -n "FillLight" -p $mainGroup`;
-    string $fillS = `createNode areaLight -n "FillLightShape" -p $fillT`;
-    
-    connectAttr -nextAvailable ($fillT + ".instObjGroups") "defaultLightSet.dagSetMembers";
     setAttr ($fillS+".intensity") 20; setAttr -type double3 ($fillS+".color") 0.4 0.5 0.8;
-    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $fillT; 
+    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $fillT;
     move ($cX - $maxDim*3) ($cY - $maxDim*1) ($cZ + $maxDim*1.5) $fillT;
 
-    string $rimT = `createNode transform -n "RimLight" -p $mainGroup`;
-    string $rimS = `createNode areaLight -n "RimLightShape" -p $rimT`;
-    
-    connectAttr -nextAvailable ($rimT + ".instObjGroups") "defaultLightSet.dagSetMembers";
-    setAttr ($rimS+".intensity") 300; setAttr -type double3 ($rimS+".color") 0.9 0.9 1.0; 
-    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $rimT; 
-    move $cX ($cY + $maxDim*3) ($cZ + $maxDim*3) $rimT; 
+    setAttr ($rimS+".intensity") 120; setAttr -type double3 ($rimS+".color") 0.9 0.9 1.0;
+    scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $rimT;
+    move $cX ($cY + $maxDim*3) ($cZ + $maxDim*3) $rimT;
 
     if (`pluginInfo -q -loaded "mtoa"`) {
         string $domeT = `createNode transform -n "Arnold_DomeLight" -p $mainGroup`;
         string $domeS = `createNode aiSkyDomeLight -n "Arnold_DomeLightShape" -p $domeT`;
-        setAttr ($domeS + ".intensity") 0.1; 
+        setAttr ($domeS + ".intensity") 0.1;
     }
 
-    // --- 4. MULTI-CÁMARAS Y AIMING ---
+    // --- 4. MULTI-CÁMARAS ---
     string $cam1T = `createNode transform -n "Studio_Cam_Main" -p $mainGroup`;
     string $cam1S = `createNode camera -n "Studio_Cam_MainShape" -p $cam1T`;
     setAttr ($cam1S+".focalLength") 35; setAttr ($cam1S+".depthOfField") 0;
@@ -104,15 +142,23 @@ global proc createFullStudio() {
     string $objectsToAim[] = {$cam1T, $cam2T, $cam3T, $keyT, $fillT, $rimT};
     for ($obj in $objectsToAim) {
         string $aim[] = `aimConstraint -aimVector 0 0 -1 -upVector 0 1 0 -worldUpType "vector" -worldUpVector 0 0 1 $loc[0] $obj`;
-        delete $aim[0]; 
+        delete $aim[0];
     }
-    delete $loc[0]; 
-    
-    select -r $validMeshes; 
-    viewFit -fitFactor 0.5 $cam1S; 
-    viewFit -fitFactor 0.5 $cam2S; 
-    viewFit -fitFactor 0.5 $cam3S; 
-    
+    delete $loc[0];
+
+    // Bug #4: viewFit requires the camera to be active in a panel to have effect;
+    // cycle each studio camera through the active panel, fit, then restore
+    select -r $validMeshes;
+    string $panels[] = `getPanel -type "modelPanel"`;
+    if (size($panels) > 0) {
+        string $origCam = `modelPanel -q -camera $panels[0]`;
+        lookThru $panels[0] $cam1T; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $cam2T; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $cam3T; viewFit -fitFactor 0.5;
+        lookThru $panels[0] $origCam;
+    }
+
     select -clear;
     print "LookDev Studio Generado.\n";
+    undoInfo -closeChunk;
 }
