@@ -20,7 +20,9 @@ global proc createFullStudio() {
     string $sourceMeshes[];
     string $sel[] = `ls -sl`;
     if (size($sel) > 0) {
-        $sourceMeshes = `ls -sl -dag -type "mesh"`;
+        // listRelatives -allDescendents traverses the full group hierarchy;
+        // ls -sl -dag -type mesh does not reliably recurse into nested groups
+        $sourceMeshes = `listRelatives -allDescendents -type "mesh" $sel`;
     } else {
         $sourceMeshes = `ls -type "mesh"`;
     }
