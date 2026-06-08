@@ -1,6 +1,6 @@
 # 🎬 LookDev Studio Pro
 
-![Version](https://img.shields.io/badge/version-1.0.4-blue.svg)
+![Version](https://img.shields.io/badge/version-1.0.5-blue.svg)
 ![Target](https://img.shields.io/badge/target-Maya_2024%2B_%7C_Arnold-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 ![Status](https://img.shields.io/badge/status-Active_Development-success.svg)
@@ -18,7 +18,7 @@ Reduce un proceso de setup manual de 15-20 minutos a **un solo clic (< 5 segundo
 * **Escalamiento Procedimental Inteligente:** Lee la selección activa del artista para calcular el Bounding Box exacto del asset (con fallback a toda la escena si no hay selección) y genera un ciclorama proporcional a su escala.
 * **Iluminación Arnold Nativa:** Instancia un rig de tres luces cinemáticas (`aiAreaLight`) — Key, Fill, Rim — con jerarquía de intensidad correcta (Key 360 > Rim 144 > Fill 24) más un `aiSkyDomeLight` de ambiente. Todos los tipos de luz cuentan con guard de plugin `mtoa` y fallback a luces nativas de Maya.
 * **Ciclorama Shadow Catcher:** El ciclorama usa `aiShadowMatte` con `backgroundColor` RGB 0.596 — color de fondo exacto e independiente de la iluminación, sin gradientes ni variaciones por posición de luces. El asset proyecta sombras perfectas sobre él como si fuera un suelo físico real. Fallback a `lambert` si mtoa no está cargado.
-* **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (Main, Side, High) apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
+* **Tri-Cam Setup Automático:** Genera y encuadra tres cámaras de producción (`CAM_Studio_Main`, `CAM_Studio_Side`, `CAM_Studio_High`) apuntadas al centro de masa del objeto mediante `aimConstraint`, encuadradas correctamente via `lookThru` + `viewFit`.
 * **Z-Up Pipeline Ready:** Construcción nativa en coordenadas Z-Up para mantener la consistencia milimétrica con exportaciones a Unreal Engine.
 * **Undo de Un Solo Paso:** Todo el setup (~30 nodos) queda envuelto en un `undoInfo` chunk, permitiendo deshacer con un único `Ctrl+Z`.
 * **Naming Convention Compliance:** Los nodos del rig respetan la convención `_LGT` definida en `NamingConvention_Guide.md`, pasando el QA check de nomenclatura del pipeline.
@@ -39,25 +39,28 @@ Esta herramienta opera como un **Gatekeeper (Guardián)** pre-integración, dise
 ## 🛠️ Decisiones Técnicas Clave
 
 1. **Traversal de Jerarquía Agrupada:**
-   `ls -sl -dag -type mesh` no recursa de forma fiable en grupos anidados de múltiples niveles. Se usa `listRelatives -allDescendents -type mesh` sobre la selección, que garantiza el recorrido completo del DAG independientemente de la profundidad del grupo.
+   `ls -sl -dag -type mesh` no recursa de forma fiable en grupos anidados de múltiples niveles. Se usa `listRelatives -allDescendents -type mesh -ni` sobre la selección, que garantiza el recorrido completo del DAG sin incluir intermediate objects (deformadores, blend shapes, skin clusters) que contaminarían el bounding box.
 
-2. **Captura de Selección Antes del Grupo Raíz:**
-   `group -empty` selecciona automáticamente el nodo recién creado, pisando la selección original del artista. La selección se captura en `$sel[]` en la primera línea del procedimiento, antes de cualquier operación de creación de nodos.
+2. **Validación Pre-Chunk:**
+   Toda la validación (detección de mallas, cálculo de bounding box) ocurre **antes** de abrir el `undoInfo` chunk. Si un error ocurre en fase de validación, el chunk nunca se abre y el sistema de undo de la sesión permanece intacto. El chunk solo se abre cuando el entorno está garantizado de construirse sin errores tempranos.
 
-3. **`aiShadowMatte` vs `aiStandardSurface` para el ciclorama:**
+3. **Captura de Selección Antes del Grupo Raíz:**
+   `group -empty` selecciona automáticamente el nodo recién creado, pisando la selección original del artista. La selección se captura en `$sel[]` al inicio del procedimiento, antes de cualquier operación de creación de nodos.
+
+4. **`aiShadowMatte` vs `aiStandardSurface` para el ciclorama:**
    Con `aiStandardSurface roughness 1.0`, el color visible del fondo depende de cuánta luz llega a cada punto — las luces del rig crean gradientes inevitables. `aiShadowMatte` desacopla el color del fondo de la iluminación: `backgroundColor` es exactamente lo que se renderiza, sin importar el rig. Además actúa como shadow catcher, mostrando las sombras del asset sobre el fondo de forma física.
 
-4. **Detección de Crease Post-Extrusión:**
-   Después de `polyExtrudeEdge`, los índices de arista se reasignan. En lugar de reutilizar el índice `e[3]` (que ya no apunta al crease), se usa `polyListComponentConversion -toEdge -internal` sobre las dos caras resultantes para encontrar siempre la arista interior correcta antes del `polyBevel`.
+5. **Detección de Crease Post-Extrusión:**
+   Después de `polyExtrudeEdge`, los índices de arista se reasignan. En lugar de reutilizar el índice `e[3]` (que ya no apunta al crease), se usa `polyListComponentConversion -toEdge -internal` sobre las dos caras resultantes para encontrar siempre la arista interior correcta antes del `polyBevel`. El resultado se valida con `size($creaseEdges) > 0` antes de ejecutar el bevel.
 
-5. **Encuadre de Cámaras (`viewFit`):**
+6. **Encuadre de Cámaras (`viewFit`):**
    `viewFit` solo tiene efecto sobre la cámara activa en un panel. El script cicla cada cámara de studio por el viewport activo via `lookThru`, ejecuta el fit, y restaura la cámara original del artista.
 
-6. **Guard de Plugin `mtoa`:**
-   Tanto el tipo de luz (`aiAreaLight` vs `areaLight`) como el shader del ciclorama (`aiStandardSurface` vs `lambert`) se resuelven en runtime con `pluginInfo -q -loaded "mtoa"`, haciendo el script funcional en instalaciones sin Arnold.
+7. **Guard de Plugin `mtoa` (cacheado):**
+   El resultado de `pluginInfo -q -loaded "mtoa"` se captura una sola vez en `$isMtoa` al inicio del procedimiento. Los tres bloques condicionales que dependen del plugin usan esta variable, eliminando queries repetidas y centralizando la lógica.
 
-7. **Optimización de AimConstraints:**
-   Cámaras y luces se unificaron en un único array procesado en bucle, apuntando a un locator temporal que se purga de la escena al finalizar.
+8. **Optimización de AimConstraints:**
+   Cámaras y luces se unificaron en un único array procesado en bucle, apuntando a un locator temporal. El locator se crea bajo `$mainGroup` para que, en caso de error posterior, sea recogido por la limpieza automática de la siguiente ejecución.
 
 ---
 
@@ -82,11 +85,25 @@ https://github.com/user-attachments/assets/0ce183ec-5260-474c-bce9-671c765813e2
 ## 📁 Documentación Anexa
 
 * [Guía de Nomenclatura y Estructura Work/Publish (TAR-021)](./docs/NamingConvention_Guide.md)
-* [Auditoría Técnica — 10 bugs identificados y corregidos (v1.0.1)](./Auditoria.md)
+* [Auditoría Técnica v1 — 10 bugs identificados y corregidos (v1.0.1)](./Auditoria.md)
 
 ---
 
 ## 📋 Changelog
+
+### v1.0.5
+- **Fix crítico:** Toda la validación movida pre-`undoInfo -openChunk` — un error temprano ya no deja el chunk abierto y corrompe el undo de la sesión.
+- **Fix alto:** `listRelatives -allDescendents` ahora pasa `-ni` — intermediate objects (deformadores, blend shapes) excluidos del bounding box.
+- **Fix medio:** Guard de array vacío en `$parent[0]` — meshes sin padre ya no pasan silenciosamente al bounding box.
+- **Fix medio:** `polyBevel` solo se ejecuta si `$creaseEdges` no está vacío — ciclorama nunca queda con esquina aguda sin error visible.
+- **Fix medio:** `Cyclorama_GEO` huérfano eliminado en la limpieza inicial — evita colisión de nombres y renombrado automático a `Cyclorama_GEO1`.
+- **Fix menor:** `setAttr backgroundColor` sin `-type double3` — compatible con MtoA < 3.3 donde el atributo es `float3`.
+- **Fix menor:** Locator de aim creado bajo `$mainGroup` — no filtra al mundo si falla antes de ser eliminado.
+- **Ajuste:** Cámaras renombradas a convención `CAM_` (`CAM_Studio_Main`, `CAM_Studio_Side`, `CAM_Studio_High`) — conformes con `NamingConvention_Guide.md §3`.
+- **Cleanup:** `pluginInfo -q -loaded "mtoa"` cacheado en `$isMtoa` — consultado una sola vez por ejecución.
+- **Cleanup:** Eliminados todos los prints `[DEBUG]` de producción.
+- **Cleanup:** Eliminados comentarios `Bug #X` desactualizados del audit v1.
+- **Cleanup:** `-ch 0` en `polyPlane` y `polyExtrudeEdge` — sin historial de construcción en el ciclorama.
 
 ### v1.0.4
 - **Reemplazo:** `aiStandardSurface` → `aiShadowMatte` en el ciclorama — color de fondo exacto, independiente de la iluminación, con shadow catcher nativo.
