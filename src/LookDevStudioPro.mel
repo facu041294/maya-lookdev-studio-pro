@@ -9,28 +9,38 @@ button -label "Generar Estudio" -command "createFullStudio()" -height 40 -backgr
 showWindow photoStudioWindow;
 
 global proc createFullStudio() {
-    undoInfo -openChunk;  // Bug #6: wrap all node creation in a single undo chunk
+    undoInfo -openChunk;
+
+    // Capturar selección ANTES de crear el grupo: group -empty selecciona
+    // el nodo recién creado y pisa la selección original del usuario
+    string $sel[] = `ls -sl`;
 
     // --- 0. PREVENCIÓN DE ERRORES ---
     if (`objExists "PhotoStudio_SETUP_GRP"`) delete "PhotoStudio_SETUP_GRP";
     string $mainGroup = `group -empty -name "PhotoStudio_SETUP_GRP"`;
 
     // --- 1. ANÁLISIS DE GEOMETRÍA ---
-    // Bug #1: respect user selection; fall back to all scene meshes if nothing selected
     string $sourceMeshes[];
-    string $sel[] = `ls -sl`;
+    print ("[DEBUG] Seleccion activa (" + size($sel) + " objetos): ");
+    for ($s in $sel) print ($s + "  ");
+    print "\n";
+
     if (size($sel) > 0) {
-        // listRelatives -allDescendents traverses the full group hierarchy;
-        // ls -sl -dag -type mesh does not reliably recurse into nested groups
         $sourceMeshes = `listRelatives -allDescendents -type "mesh" $sel`;
     } else {
         $sourceMeshes = `ls -type "mesh"`;
     }
+    print ("[DEBUG] sourceMeshes (" + size($sourceMeshes) + "): ");
+    for ($s in $sourceMeshes) print ($s + "  ");
+    print "\n";
+
     string $validMeshes[];
     for ($mesh in $sourceMeshes) {
         string $parent[] = `listRelatives -p $mesh`;
+        print ("[DEBUG] mesh='" + $mesh + "'  parent='" + $parent[0] + "'\n");
         if ($parent[0] != "Cyclorama_GEO") $validMeshes[size($validMeshes)] = $mesh;
     }
+    print ("[DEBUG] validMeshes finales: " + size($validMeshes) + "\n");
 
     if (!size($validMeshes)) {
         undoInfo -closeChunk;
@@ -99,23 +109,21 @@ global proc createFullStudio() {
         $rimT  = `createNode transform -n "Rim_LGT"       -p $mainGroup`;
         $rimS  = `createNode areaLight -n "Rim_LGTShape"  -p $rimT`;
     }
-    // Bug #8: use high-level sets API instead of raw connectAttr to defaultLightSet
-    sets -addElement $keyT  defaultLightSet;
-    sets -addElement $fillT defaultLightSet;
-    sets -addElement $rimT  defaultLightSet;
+    connectAttr -nextAvailable ($keyT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
+    connectAttr -nextAvailable ($fillT + ".instObjGroups") "defaultLightSet.dagSetMembers";
+    connectAttr -nextAvailable ($rimT  + ".instObjGroups") "defaultLightSet.dagSetMembers";
 
-    // Bug #7: Key 300 > Rim 120 > Fill 20 (classic 3-point hierarchy)
-    setAttr ($keyS+".intensity") 300; setAttr -type double3 ($keyS+".color") 1 0.85 0.6;
+    setAttr ($keyS+".intensity") 360; setAttr -type double3 ($keyS+".color") 1 0.85 0.6;
     scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $keyT;
-    move ($cX + $maxDim*2) ($cY - $maxDim*2) ($cZ + $maxDim*2) $keyT;
+    move ($cX + $maxDim*1.5) ($cY - $maxDim*1.5) ($cZ + $maxDim*1.5) $keyT;
 
-    setAttr ($fillS+".intensity") 20; setAttr -type double3 ($fillS+".color") 0.4 0.5 0.8;
+    setAttr ($fillS+".intensity") 24; setAttr -type double3 ($fillS+".color") 0.4 0.5 0.8;
     scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $fillT;
-    move ($cX - $maxDim*3) ($cY - $maxDim*1) ($cZ + $maxDim*1.5) $fillT;
+    move ($cX - $maxDim*2) ($cY - $maxDim*0.8) ($cZ + $maxDim*1.2) $fillT;
 
-    setAttr ($rimS+".intensity") 120; setAttr -type double3 ($rimS+".color") 0.9 0.9 1.0;
+    setAttr ($rimS+".intensity") 144; setAttr -type double3 ($rimS+".color") 0.9 0.9 1.0;
     scale ($maxDim*0.5) ($maxDim*0.5) ($maxDim*0.5) $rimT;
-    move $cX ($cY + $maxDim*3) ($cZ + $maxDim*3) $rimT;
+    move $cX ($cY + $maxDim*2) ($cZ + $maxDim*2) $rimT;
 
     if (`pluginInfo -q -loaded "mtoa"`) {
         string $domeT = `createNode transform -n "Arnold_DomeLight" -p $mainGroup`;
@@ -132,12 +140,12 @@ global proc createFullStudio() {
     string $cam2T = `createNode transform -n "Studio_Cam_Side" -p $mainGroup`;
     string $cam2S = `createNode camera -n "Studio_Cam_SideShape" -p $cam2T`;
     setAttr ($cam2S+".focalLength") 35; setAttr ($cam2S+".depthOfField") 0;
-    move ($cX + $maxDim*1.5) ($cY - $maxDim*1.5) ($cZ + $maxDim*1.0) $cam2T;
+    move ($cX + $maxDim*1.3) ($cY - $maxDim*1.5) ($cZ + $maxDim*1.0) $cam2T;
 
     string $cam3T = `createNode transform -n "Studio_Cam_High" -p $mainGroup`;
     string $cam3S = `createNode camera -n "Studio_Cam_HighShape" -p $cam3T`;
     setAttr ($cam3S+".focalLength") 35; setAttr ($cam3S+".depthOfField") 0;
-    move $cX ($cY - $maxDim*1.5) ($cZ + $maxDim*3.0) $cam3T;
+    move $cX ($cY - $maxDim*1.5) ($cZ + $maxDim*1.8) $cam3T;
 
     // --- 5. AIM & FRAMING ---
     string $loc[] = `spaceLocator -p $cX $cY $cZ`;
