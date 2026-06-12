@@ -35,8 +35,10 @@ global proc applyRenderPreset(string $preset) {
         setAttr "defaultArnoldRenderOptions.GIDiffuseSamples"      $diff;
         setAttr "defaultArnoldRenderOptions.GISpecularSamples"     $spec;
         setAttr "defaultArnoldRenderOptions.GITransmissionSamples" $spec;
-        setAttr "defaultArnoldRenderOptions.GISSSSamples"          $spec;
-        setAttr "defaultArnoldRenderOptions.GIVolumeSamples"       2;
+        if (`attributeExists "GISSSamples"    "defaultArnoldRenderOptions"`)
+            setAttr "defaultArnoldRenderOptions.GISSSamples"       $spec;
+        if (`attributeExists "GIVolumeSamples" "defaultArnoldRenderOptions"`)
+            setAttr "defaultArnoldRenderOptions.GIVolumeSamples"   2;
     }
     print ("Render preset '" + $preset + "' aplicado: " + $w + "x" + $h + ".\n");
 }
@@ -162,22 +164,35 @@ global proc createFullStudio() {
     }
 
     // --- 3. CÁMARAS DE PERSPECTIVA ---
+    // fitDist: distancia mínima desde el centro para encuadrar el asset completo.
+    // Fórmula: semidiagonal / tan(vFOV/2). Con focal 35mm y apertura 24mm:
+    //   tan(vFOV/2) = 12/35 → fitDist = halfDiag * (35/12). +15% de margen.
+    float $diagX = $bb[3]-$bb[0]; float $diagY = $bb[4]-$bb[1]; float $diagZ = $bb[5]-$bb[2];
+    float $halfDiag = sqrt($diagX*$diagX + $diagY*$diagY + $diagZ*$diagZ) * 0.5;
+    float $fitDist  = $halfDiag * (35.0/12.0) * 1.15;
+
     string $perspGroup = `group -empty -name "CamsPersp_GRP" -p $mainGroup`;
 
     string $cam1T = `createNode transform -n "CAM_Studio_Main" -p $perspGroup`;
     string $cam1S = `createNode camera -n "CAM_Studio_MainShape" -p $cam1T`;
     setAttr ($cam1S+".focalLength") 35; setAttr ($cam1S+".depthOfField") 0;
-    move ($cX - $maxDim*0.5) ($cY - $maxDim*2) ($cZ + $maxDim*1.5) $cam1T;
+    float $d1x=-1.0; float $d1y=-4.0; float $d1z=3.0;
+    float $l1=sqrt($d1x*$d1x+$d1y*$d1y+$d1z*$d1z);
+    move ($cX+$fitDist*$d1x/$l1) ($cY+$fitDist*$d1y/$l1) ($cZ+$fitDist*$d1z/$l1) $cam1T;
 
     string $cam2T = `createNode transform -n "CAM_Studio_Side" -p $perspGroup`;
     string $cam2S = `createNode camera -n "CAM_Studio_SideShape" -p $cam2T`;
     setAttr ($cam2S+".focalLength") 35; setAttr ($cam2S+".depthOfField") 0;
-    move ($cX + $maxDim*1.3) ($cY - $maxDim*1.5) ($cZ + $maxDim*1.0) $cam2T;
+    float $d2x=3.0; float $d2y=-3.0; float $d2z=2.0;
+    float $l2=sqrt($d2x*$d2x+$d2y*$d2y+$d2z*$d2z);
+    move ($cX+$fitDist*$d2x/$l2) ($cY+$fitDist*$d2y/$l2) ($cZ+$fitDist*$d2z/$l2) $cam2T;
 
     string $cam3T = `createNode transform -n "CAM_Studio_High" -p $perspGroup`;
     string $cam3S = `createNode camera -n "CAM_Studio_HighShape" -p $cam3T`;
     setAttr ($cam3S+".focalLength") 35; setAttr ($cam3S+".depthOfField") 0;
-    move $cX ($cY - $maxDim*1.5) ($cZ + $maxDim*1.8) $cam3T;
+    float $d3x=0.0; float $d3y=-2.0; float $d3z=3.0;
+    float $l3=sqrt($d3x*$d3x+$d3y*$d3y+$d3z*$d3z);
+    move ($cX+$fitDist*$d3x/$l3) ($cY+$fitDist*$d3y/$l3) ($cZ+$fitDist*$d3z/$l3) $cam3T;
 
     // --- 4. CÁMARAS ORTOGRÁFICAS (grupo aislado del de perspectiva) ---
     string $orthoGroup = `group -empty -name "CamsOrtho_GRP" -p $mainGroup`;
@@ -187,20 +202,20 @@ global proc createFullStudio() {
     string $camTopT = `createNode transform -n "CAM_Ortho_Top"   -p $orthoGroup`;
     string $camTopS = `createNode camera   -n "CAM_Ortho_TopShape"   -p $camTopT`;
     setAttr ($camTopS+".orthographic") 1;
-    setAttr ($camTopS+".orthoWidth") ($maxDim * 1.5);
-    move $cX $cY ($cZ + $maxDim * 5) $camTopT;
+    setAttr ($camTopS+".orthographicWidth") ($maxDim * 1.8);
+    move $cX $cY ($cZ + $maxDim * 6) $camTopT;
 
     string $camFrontT = `createNode transform -n "CAM_Ortho_Front" -p $orthoGroup`;
     string $camFrontS = `createNode camera   -n "CAM_Ortho_FrontShape" -p $camFrontT`;
     setAttr ($camFrontS+".orthographic") 1;
-    setAttr ($camFrontS+".orthoWidth") ($maxDim * 1.5);
-    move $cX ($cY - $maxDim * 5) $cZ $camFrontT;
+    setAttr ($camFrontS+".orthographicWidth") ($maxDim * 1.8);
+    move $cX ($cY - $maxDim * 6) $cZ $camFrontT;
 
     string $camSideT = `createNode transform -n "CAM_Ortho_Side"  -p $orthoGroup`;
     string $camSideS = `createNode camera   -n "CAM_Ortho_SideShape"  -p $camSideT`;
     setAttr ($camSideS+".orthographic") 1;
-    setAttr ($camSideS+".orthoWidth") ($maxDim * 1.5);
-    move ($cX + $maxDim * 5) $cY $cZ $camSideT;
+    setAttr ($camSideS+".orthographicWidth") ($maxDim * 1.8);
+    move ($cX + $maxDim * 6) $cY $cZ $camSideT;
 
     // --- 5. AIM & FRAMING ---
     string $loc[] = `spaceLocator -p $cX $cY $cZ`;
